@@ -190,14 +190,32 @@ format_size() {
   local size="$1"
   local unit="B"
 
-  if ((size >= 1024 * 1024 * 1024)); then
-    size=$(echo "scale=2; $size / (1024*1024*1024)" | bc 2>/dev/null || echo "$size")
+  # Handle empty or non-numeric input
+  if [[ -z "$size" || ! "$size" =~ ^[0-9]+$ ]]; then
+    echo "0B"
+    return
+  fi
+
+  if ((size >= 1073741824)); then  # 1024^3
+    if command -v bc &>/dev/null; then
+      size=$(echo "scale=1; $size / 1073741824" | bc 2>/dev/null)
+    else
+      size=$((size / 1073741824))
+    fi
     unit="GB"
-  elif ((size >= 1024 * 1024)); then
-    size=$(echo "scale=2; $size / (1024*1024)" | bc 2>/dev/null || echo "$size")
+  elif ((size >= 1048576)); then  # 1024^2
+    if command -v bc &>/dev/null; then
+      size=$(echo "scale=1; $size / 1048576" | bc 2>/dev/null)
+    else
+      size=$((size / 1048576))
+    fi
     unit="MB"
   elif ((size >= 1024)); then
-    size=$(echo "scale=2; $size / 1024" | bc 2>/dev/null || echo "$size")
+    if command -v bc &>/dev/null; then
+      size=$(echo "scale=1; $size / 1024" | bc 2>/dev/null)
+    else
+      size=$((size / 1024))
+    fi
     unit="KB"
   fi
 
@@ -239,9 +257,9 @@ download_content() {
 
   local header_cmd="${curl_cmd//-o \"$tmp_file\"/-I} \"$url\""
   local headers=$(eval $header_cmd 2>/dev/null)
-  local total_size=$(echo "$headers" | grep -i "Content-Length:" | tail -1 | awk '{print $2}' | tr -d '\r')
+  local total_size=$(echo "$headers" | grep -i "Content-Length:" | tail -1 | awk '{print $2}' | tr -d '\r' | tr -d '\n')
 
-  if [[ -z "$total_size" ]]; then
+  if [[ -z "$total_size" || ! "$total_size" =~ ^[0-9]+$ ]]; then
     total_size="unknown"
   fi
 
@@ -259,8 +277,13 @@ download_content() {
         (
           flock -x 200
           printf "\r%-${#MESSAGE}s" " "
-          if [[ "$total_size" != "unknown" ]]; then
-            local progress=$(echo "scale=1; $current_size * 100 / $total_size" | bc 2>/dev/null || echo "0")
+          if [[ "$total_size" != "unknown" && "$total_size" -gt 0 ]]; then
+            local progress
+            if command -v bc &>/dev/null && [[ "$current_size" =~ ^[0-9]+$ ]] && [[ "$total_size" =~ ^[0-9]+$ ]]; then
+              progress=$(echo "scale=1; $current_size * 100 / $total_size" | bc 2>/dev/null || echo "0")
+            else
+              progress=$(( (current_size * 100) / total_size ))
+            fi
             MESSAGE="$(cyan "Downloading") ${filename}: $(format_size $current_size) of $(format_size $total_size) (${progress}%)"
           else
             MESSAGE="$(cyan "Downloading") ${filename}: $(format_size $current_size)"
